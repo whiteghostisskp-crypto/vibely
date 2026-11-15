@@ -1,0 +1,228 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VIBELY - Social Network</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#10121a;color:#f5f5f7;font-family:Arial,sans-serif}
+header{padding:20px;background:#191c28;display:flex;justify-content:space-between;align-items:center}
+h1{color:#9b8cff;margin:0}
+main{max-width:650px;margin:25px auto;padding:15px}
+.card{background:#1c2030;border:1px solid #30364a;border-radius:15px;padding:18px;margin-bottom:16px}
+input,textarea{width:100%;padding:12px;margin:7px 0 12px;background:#101522;color:white;border:1px solid #414960;border-radius:9px}
+textarea{min-height:85px;resize:vertical}
+button{background:#8170ef;color:white;border:0;border-radius:9px;padding:11px 15px;margin:3px;cursor:pointer;font-weight:bold}
+button.secondary{background:#34394b}
+button:disabled{opacity:.5}
+.muted{color:#a5a9ba;font-size:13px}
+.post{border-top:1px solid #363b4c;padding:15px 0}
+.hidden{display:none}
+#message{white-space:pre-wrap}
+</style>
+</head>
+<body>
+<header>
+<h1>✦ VIBELY</h1>
+<button id="logout" class="secondary hidden">Log out</button>
+</header>
+<main>
+<section id="auth" class="card">
+<h2>Welcome to VIBELY</h2>
+<p class="muted">Create an account or log in.</p>
+<label>Email</label>
+<input id="email" type="email" placeholder="Your email" autocomplete="email">
+<label>Username (for registration)</label>
+<input id="username" maxlength="20" placeholder="Your username">
+<label>Password</label>
+<input id="password" type="password" minlength="6" placeholder="Password">
+<button id="register">Create account</button>
+<button id="login" class="secondary">Login</button>
+</section>
+
+<section id="social" class="hidden">
+<div class="card">
+<h2>Share something ✨</h2>
+<textarea id="content" maxlength="280" placeholder="What's happening?"></textarea>
+<button id="publish">Publish post</button>
+</div>
+<div class="card">
+<h2>Community feed</h2>
+<div id="feed">Loading posts...</div>
+</div>
+</section>
+<p id="message" class="muted" role="status"></p>
+</main>
+
+<script type="module">
+import { createClient } from
+'https://esm.sh/@supabase/supabase-js@2';
+
+// YOUR SUPABASE CONFIGURATION
+const SUPABASE_URL = 'YOUR_PROJECT_URL';
+const SUPABASE_KEY = 'YOUR_PUBLISHABLE_KEY';
+
+const db = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const $ = id => document.getElementById(id);
+let currentUser = null;
+
+function message(text) {
+  $('message').textContent = text;
+}
+
+function showApp(user) {
+  currentUser = user;
+  $('auth').classList.toggle('hidden', !!user);
+  $('social').classList.toggle('hidden', !user);
+  $('logout').classList.toggle('hidden', !user);
+  if (user) loadPosts();
+}
+
+// REGISTER
+$('register').onclick = async () => {
+  const email = $('email').value.trim();
+  const password = $('password').value;
+  const username = $('username').value.trim();
+
+  if (!email || password.length < 6 || !username) {
+    message('Enter your email, username and a password of at least 6 characters.');
+    return;
+  }
+
+  const {data, error} = await db.auth.signUp({
+    email,
+    password,
+    options: {
+      data: {username},
+      emailRedirectTo: window.location.origin + window.location.pathname
+    }
+  });
+
+  if (error) return message(error.message);
+
+  if (data.session) {
+    message('Welcome to VIBELY!');
+    showApp(data.session.user);
+  } else {
+    message('Check your email to confirm your account, then log in.');
+  }
+};
+
+// LOGIN
+$('login').onclick = async () => {
+  const {data, error} = await db.auth.signInWithPassword({
+    email: $('email').value.trim(),
+    password: $('password').value
+  });
+
+  if (error) return message(error.message);
+
+  message('Login successful!');
+  showApp(data.user);
+};
+
+// LOGOUT
+$('logout').onclick = async () => {
+  const {error} = await db.auth.signOut();
+  if (error) return message(error.message);
+  showApp(null);
+  message('You logged out.');
+};
+
+// PUBLISH POSTS
+$('publish').onclick = async () => {
+  const content = $('content').value.trim();
+  if (!content) return message('Write something first.');
+
+  const {error} = await db.from('posts').insert({
+    user_id: currentUser.id,
+    content
+  });
+
+  if (error) return message(error.message);
+
+  $('content').value = '';
+  message('Your post is online!');
+  loadPosts();
+};
+
+// LOAD COMMUNITY FEED
+async function loadPosts() {
+  const feed = $('feed');
+  feed.textContent = 'Loading...';
+
+  const {data, error} = await db
+    .from('posts')
+    .select('id, content, created_at, user_id, profiles(username), likes(user_id)')
+    .order('created_at', {ascending:false})
+    .limit(50);
+
+  if (error) {
+    feed.textContent = error.message;
+    return;
+  }
+
+  feed.replaceChildren();
+
+  if (!data.length) {
+    feed.textContent = 'No posts yet. Be the first!';
+    return;
+  }
+
+  data.forEach(post => {
+    const article = document.createElement('article');
+    article.className = 'post';
+
+    const author = document.createElement('b');
+    author.textContent = '@' + (post.profiles?.username || 'user');
+
+    const text = document.createElement('p');
+    text.textContent = post.content;
+
+    const like = document.createElement('button');
+    const likes = post.likes || [];
+    const liked = likes.some(x => x.user_id === currentUser.id);
+    like.textContent = (liked ? '♥ ' : '♡ ') + likes.length;
+    like.className = 'secondary';
+
+    like.onclick = async () => {
+      if (liked) {
+        const {error} = await db.from('likes')
+          .delete()
+          .eq('post_id', post.id)
+          .eq('user_id', currentUser.id);
+        if (error) return message(error.message);
+      } else {
+        const {error} = await db.from('likes').insert({
+          post_id: post.id,
+          user_id: currentUser.id
+        });
+        if (error) return message(error.message);
+      }
+      loadPosts();
+    };
+
+    const date = document.createElement('p');
+    date.className = 'muted';
+    date.textContent = new Date(post.created_at).toLocaleString();
+
+    article.append(author, text, date, like);
+    feed.append(article);
+  });
+}
+
+// RESTORE EXISTING SESSION
+const {data: {session}} = await db.auth.getSession();
+showApp(session?.user || null);
+
+db.auth.onAuthStateChange((event, session) => {
+  if (event === 'SIGNED_IN' || event === 'SIGNED_OUT') {
+    showApp(session?.user || null);
+  }
+});
+</script>
+</body>
+</html>
